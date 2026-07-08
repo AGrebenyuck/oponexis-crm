@@ -15,6 +15,17 @@ import {
 	updateWorkOrderMessage,
 } from '@/lib/telegram'
 
+async function latestSmsTermin({ leadId, phone }) {
+	if (!leadId && !phone) return null
+	return db.smsFormLog.findFirst({
+		where: {
+			status: 'pending',
+			OR: [leadId ? { leadId } : null, phone ? { phone } : null].filter(Boolean),
+		},
+		orderBy: [{ visitDate: 'desc' }, { sentAt: 'desc' }, { id: 'desc' }],
+	})
+}
+
 function normalizeWheelRimSize(value) {
 	const raw = String(value || '').trim().toUpperCase().replace(/\s+/g, '')
 	if (!raw) return null
@@ -84,7 +95,21 @@ export async function POST(req) {
 		}
 
 		const normalizedPhone = normalizePhone(phone) || phone.trim()
-		const visitDateObj = parseYmdToUtcDate(visitDate)
+		const fallbackSms = !visitDate || !visitTime
+			? await latestSmsTermin({ leadId: leadId || null, phone: normalizedPhone })
+			: null
+		const effectiveVisitDate = visitDate || fallbackSms?.visitDate?.toISOString().slice(0, 10) || null
+		const effectiveVisitTime = visitTime || fallbackSms?.visitTime || null
+		const visitDateObj = parseYmdToUtcDate(effectiveVisitDate)
+		console.info('[order client] received', {
+			leadId: leadId || null,
+			phone: normalizedPhone,
+			visitDate: visitDate || null,
+			visitTime: visitTime || null,
+			fallbackSmsId: fallbackSms?.id || null,
+			effectiveVisitDate,
+			effectiveVisitTime,
+		})
 		const customer = await upsertCustomerFromContact({
 			phone: normalizedPhone,
 			name,
@@ -95,7 +120,7 @@ export async function POST(req) {
 			leadId: leadId || null,
 			phone: normalizedPhone,
 			visitDateObj,
-			visitTime: visitTime || null,
+			visitTime: effectiveVisitTime,
 		})
 
 		const data = {
@@ -112,7 +137,7 @@ export async function POST(req) {
 			lng: typeof lng === 'number' ? lng : null,
 			notes: normalizeOptionalText(notes),
 			visitDate: visitDateObj,
-			visitTime: visitTime || null,
+			visitTime: effectiveVisitTime,
 			wheelRimSize: normalizedWheelRimSize,
 			tireSize: normalizeOptionalText(tireSize),
 			wantsInvoice: !!wantsInvoice,
@@ -129,8 +154,8 @@ export async function POST(req) {
 				await markSmsFormCompletedByLead(workOrder.leadId)
 			} else if (workOrder.phone) {
 				await markSmsFormCompletedByPhone(workOrder.phone, {
-					visitDate,
-					visitTime,
+					visitDate: effectiveVisitDate,
+					visitTime: effectiveVisitTime,
 				})
 			}
 		} catch (error) {
@@ -141,7 +166,10 @@ export async function POST(req) {
 			if (existingOrder && existingOrder.telegramMessageId) {
 				await updateWorkOrderMessage(workOrder)
 			} else {
-				await sendWorkOrderToTelegram(workOrder, { visitDate, visitTime })
+				await sendWorkOrderToTelegram(workOrder, {
+					visitDate: effectiveVisitDate,
+					visitTime: effectiveVisitTime,
+				})
 			}
 		} catch (error) {
 			console.error('[order client telegram]', error)

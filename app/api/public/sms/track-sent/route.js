@@ -11,7 +11,15 @@ export async function POST(req) {
 			return jsonCors({ ok: false, error: 'Missing phone' }, { status: 400 })
 		}
 
-		await logSmsFormSent({
+		console.info('[sms track-sent] received', {
+			leadId: leadId || null,
+			phone,
+			visitDate: visitDate || null,
+			visitTime: visitTime || null,
+			source: source || (leadId ? 'lead' : 'manual'),
+		})
+
+		const entry = await logSmsFormSent({
 			phone,
 			name,
 			service,
@@ -19,6 +27,14 @@ export async function POST(req) {
 			source: source || (leadId ? 'lead' : 'manual'),
 			visitDate,
 			visitTime,
+		})
+
+		console.info('[sms track-sent] saved', {
+			id: entry?.id || null,
+			leadId: entry?.leadId || null,
+			phone: entry?.phone || null,
+			visitDate: entry?.visitDate || null,
+			visitTime: entry?.visitTime || null,
 		})
 
 		return jsonCors({ ok: true })
