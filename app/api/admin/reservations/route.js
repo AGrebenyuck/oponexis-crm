@@ -22,11 +22,12 @@ export async function GET(req) {
 		const { searchParams } = new URL(req.url)
 		const view = searchParams.get('view') || 'future'
 		const today = DateTime.now().setZone(ZONE).startOf('day').toJSDate()
+		const todayEnd = DateTime.now().setZone(ZONE).endOf('day').toJSDate()
 
 		const workOrders = await db.workOrder.findMany({
 			where:
 				view === 'incomplete'
-					? incompleteCompletionWhere(today)
+					? incompleteCompletionWhere(todayEnd)
 					: view === 'past'
 					? realWorkOrderWhere({
 							OR: [

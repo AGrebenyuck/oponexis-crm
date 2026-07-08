@@ -101,7 +101,7 @@ export async function POST(req) {
 		const effectiveVisitDate = visitDate || fallbackSms?.visitDate?.toISOString().slice(0, 10) || null
 		const effectiveVisitTime = visitTime || fallbackSms?.visitTime || null
 		const visitDateObj = parseYmdToUtcDate(effectiveVisitDate)
-		console.info('[order client] received', {
+		console.warn('[order client] received', {
 			leadId: leadId || null,
 			phone: normalizedPhone,
 			visitDate: visitDate || null,

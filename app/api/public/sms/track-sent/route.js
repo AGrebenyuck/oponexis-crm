@@ -11,7 +11,7 @@ export async function POST(req) {
 			return jsonCors({ ok: false, error: 'Missing phone' }, { status: 400 })
 		}
 
-		console.info('[sms track-sent] received', {
+		console.warn('[sms track-sent] received', {
 			leadId: leadId || null,
 			phone,
 			visitDate: visitDate || null,
@@ -29,7 +29,7 @@ export async function POST(req) {
 			visitTime,
 		})
 
-		console.info('[sms track-sent] saved', {
+		console.warn('[sms track-sent] saved', {
 			id: entry?.id || null,
 			leadId: entry?.leadId || null,
 			phone: entry?.phone || null,
