@@ -1,0 +1,447 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String        @id @default(cuid())
+  clerkUserId  String?       @unique
+  zadarmaId    String?
+  email        String?       @unique
+  phone        String?
+  name         String?
+  username     String?
+  role         String        @default("user")
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  bonuses      Bonus[]
+  comments     Comment[]
+  referee      Referral[]    @relation("Referee")
+  referrals    Referral[]    @relation("Referrer")
+  reservations Reservation[]
+  sources      UserSource[]
+}
+
+model Partner {
+  id            String   @id @default(cuid())
+  name          String
+  code          String   @unique // что пойдёт в ?ref=
+  commissionPct Float    @default(10) // процент партнёра, %
+  createdAt     DateTime @default(now())
+}
+
+model ReferralHit {
+  id          String   @id @default(cuid())
+  partnerCode String
+  visitorId   String
+  day         String // 'YYYY-MM-DD'
+  createdAt   DateTime @default(now())
+
+  @@unique([partnerCode, visitorId, day]) // 1 хит/день/визитор/партнёр
+}
+
+model CallIntent {
+  id          String   @id @default(cuid())
+  partnerCode String
+  visitorId   String?
+  ua          String?
+  createdAt   DateTime @default(now())
+
+  @@index([partnerCode, createdAt])
+}
+
+model Lead {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  name        String
+  phone       String
+  serviceId   String
+  serviceName String?
+  selectedIds String[] @default([])
+
+  partnerCode String?
+  ua          String?
+  ip          String?
+  status      String  @default("new")
+
+  selectedNames String[] @default([])
+
+  monthKey String?
+
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id])
+
+  WorkOrder WorkOrder[]
+}
+
+model Customer {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  phone  String  @unique
+  name   String?
+  gender String?
+  source String?
+  notes  String?
+  isTest Boolean @default(false)
+
+  leads          Lead[]
+  workOrders     WorkOrder[]
+  completions    WorkOrderCompletion[]
+  seasonStatuses CustomerSeasonStatus[]
+  smsRecipients  SmsCampaignRecipient[]
+
+  @@index([name])
+  @@index([source])
+}
+
+model CustomerSeasonStatus {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  season        String
+  year          Int
+  status        String    @default("NOT_CONTACTED")
+  note          String?
+  lastContactAt DateTime?
+  nextContactAt DateTime?
+
+  @@unique([customerId, season, year])
+  @@index([season, year, status])
+}
+
+model WorkOrder {
+  id        Int      @id @default(autoincrement())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  leadId String?
+  lead   Lead?   @relation(fields: [leadId], references: [id])
+
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id])
+
+  name    String
+  phone   String
+  service String?
+  status  String  @default("new")
+
+  regNumber String?
+  color     String?
+  carModel  String?
+
+  // koła / opony
+  wheelRimSize String? @db.VarChar(8) // np. R16
+  tireSize     String? @db.VarChar(32) // np. 205/55 R16
+
+  address String?
+  lat     Float?
+  lng     Float?
+
+  notes     String?
+  visitDate DateTime?
+  visitTime String?
+
+  telegramMessageId Int?
+
+  wantsInvoice Boolean @default(false)
+  invoiceNip   String? @db.VarChar(32)
+  invoiceEmail String? @db.VarChar(191)
+
+  completions WorkOrderCompletion[]
+
+  @@index([customerId])
+  @@index([phone])
+  @@index([visitDate])
+}
+
+model WorkOrderCompletion {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  customerId  String?
+  customer    Customer?  @relation(fields: [customerId], references: [id])
+  workOrderId Int?
+  workOrder   WorkOrder? @relation(fields: [workOrderId], references: [id])
+
+  formSubmittedAt DateTime?
+  completedAt     DateTime?
+
+  name          String?
+  phone         String
+  gender        String?
+  source        String?
+  car           String?
+  serviceUsed   Boolean?
+  serviceNames  String[] @default([])
+  amount        Float?
+  invoiceIssued Boolean?
+  paymentMethod String?
+  notes         String?
+
+  importSource  String? // google_forms, internal_form, csv
+  importRowHash String? @unique
+  isTest        Boolean @default(false)
+  rawData       Json?
+
+  @@index([customerId])
+  @@index([workOrderId])
+  @@index([phone])
+  @@index([completedAt])
+}
+
+model SmsFormLog {
+  id        Int      @id @default(autoincrement())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  phone   String
+  name    String?
+  service String?
+  source  String? // 'lead', 'manual', 'sms-redirect' и т.п.
+  leadId  String?
+
+  // 'pending' – отправили СМС, ждём форму
+  // 'done'    – форма пришла, заказ создан
+  // 'deleted' – скрыто вручную (не показываем в трекере)
+  status String @default("pending")
+
+  sentAt DateTime @default(now())
+
+  // 👉 новое:
+  visitDate DateTime? // дата визита из sms-redirect (YYYY-MM-DD)
+  visitTime String? // час визита "HH:MM"
+
+  completedAt DateTime?
+}
+
+model SmsCampaign {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  name    String
+  message String
+  status  String @default("DRAFT") // DRAFT, RUNNING, COMPLETED, FAILED, CANCELLED
+
+  sourceSeason String?
+  sourceYear   Int?
+  filters      Json?
+
+  delaySeconds Int @default(7)
+  scheduledAt  DateTime?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+
+  recipients SmsCampaignRecipient[]
+
+  @@index([status])
+  @@index([scheduledAt])
+  @@index([createdAt])
+}
+
+model SmsCampaignRecipient {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  campaignId String
+  campaign   SmsCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id])
+
+  name  String?
+  phone String
+
+  status String @default("PENDING") // PENDING, SENT, FAILED, CANCELLED, BOOKED, DECLINED, CALL_BACK
+  providerMessageId String?
+  sentAt    DateTime?
+  failedAt  DateTime?
+  error     String?
+  note      String?
+
+  @@index([campaignId])
+  @@index([customerId])
+  @@index([phone])
+  @@index([status])
+}
+
+model GoogleReviewsCache {
+  id        String   @id @default("google") // один глобальный ряд
+  payload   Json
+  rating    Float?
+  total     Int?
+  url       String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Reservation {
+  id                      String               @id @default(cuid())
+  userId                  String
+  address                 String
+  serviceName             String
+  contactInfo             String
+  additionalInfo          String?
+  promoCode               String?
+  zadarmaDealId           String?
+  zadarmaTaskId           String?
+  startTime               DateTime
+  endTime                 DateTime
+  price                   Float
+  status                  String               @default("pending")
+  serviceNameIds          String[]             @default([])
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
+  user                    User                 @relation(fields: [userId], references: [id])
+  services                ServiceReservation[] @relation("ReservationServices")
+  // атрибуция
+  partnerCode             String?
+  partnerCommissionAmount Float? // комиссия партнёру в zł (под твой float)
+}
+
+model Service {
+  id                 String               @id @default(cuid())
+  name               String
+  description        String?
+  duration           Int
+  price              Float
+  originalPrice      Float?
+  additionalServices AdditionalServices[] @relation("serviceAdditional")
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  reservations       ServiceReservation[]
+}
+
+model AdditionalServices {
+  id          String   @id @default(cuid())
+  service     Service? @relation("serviceAdditional", fields: [serviceId], references: [id], onDelete: Cascade)
+  serviceId   String?
+  name        String
+  price       Float
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model PromoCode {
+  id         String    @id @default(cuid())
+  code       String    @unique
+  type       String
+  value      Float
+  maxUses    Int?
+  uses       Int       @default(0)
+  validUntil DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+}
+
+model Referral {
+  id          String   @id @default(cuid())
+  referrerId  String
+  refereeId   String
+  level       Int      @default(1)
+  bonusAmount Float
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  referee     User     @relation("Referee", fields: [refereeId], references: [id])
+  referrer    User     @relation("Referrer", fields: [referrerId], references: [id])
+}
+
+model Bonus {
+  id        String    @id @default(cuid())
+  userId    String
+  amount    Float
+  type      String
+  source    String?
+  expiresAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  user      User      @relation(fields: [userId], references: [id])
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  userId    String
+  service   String
+  text      String
+  rating    Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model UserSource {
+  id        String   @id @default(cuid())
+  userId    String
+  source    String
+  campaign  String?
+  medium    String?
+  term      String?
+  content   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model ServiceReservation {
+  id            String      @id @default(cuid())
+  reservationId String
+  serviceId     String
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  reservation   Reservation @relation("ReservationServices", fields: [reservationId], references: [id], onDelete: Cascade)
+  service       Service     @relation(fields: [serviceId], references: [id])
+}
+
+model Calendar {
+  id        String            @id @default(cuid())
+  timeGap   Int
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+  days      DayAvailability[]
+}
+
+model DayAvailability {
+  id             String    @id @default(uuid())
+  availabilityId String
+  day            DayOfWeek
+  startTime      DateTime
+  endTime        DateTime
+  availability   Calendar  @relation(fields: [availabilityId], references: [id], onDelete: Cascade)
+}
+
+model SentNotification {
+  id        String   @id @default(cuid())
+  date      DateTime @unique
+  createdAt DateTime @default(now())
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+}
+
+enum DayOfWeek {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}

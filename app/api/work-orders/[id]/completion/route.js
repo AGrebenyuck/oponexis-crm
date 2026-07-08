@@ -1,0 +1,197 @@
+import { NextResponse } from 'next/server'
+import { upsertCustomerFromContact } from '@/lib/customer'
+import { normalizeOptionalText, normalizePhone, parseYmdToUtcDate } from '@/lib/date'
+import { db } from '@/lib/prisma'
+import {
+	updateIncompleteCompletionMessage,
+	updateScheduleMessage,
+	updateWorkOrderMessage,
+} from '@/lib/telegram'
+
+function parseAmount(value) {
+	const amount = Number(String(value || '').replace(',', '.'))
+	return Number.isFinite(amount) ? amount : null
+}
+
+function boolOrNull(value) {
+	if (value === true || value === 'true') return true
+	if (value === false || value === 'false') return false
+	return null
+}
+
+async function parseBody(req) {
+	const contentType = req.headers.get('content-type') || ''
+	if (contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data')) {
+		const form = await req.formData()
+		return {
+			name: form.get('name') || '',
+			gender: form.get('gender') || '',
+			phone: form.get('phone') || '',
+			source: form.get('source') || '',
+			car: form.get('car') || '',
+			serviceUsed: form.get('serviceUsed') || '',
+			completedAt: form.get('completedAt') || '',
+			serviceNames: form.getAll('serviceNames').map(String),
+			amount: form.get('amount') || '',
+			invoiceIssued: form.get('invoiceIssued') || '',
+			paymentMethod: form.get('paymentMethod') || '',
+			notes: form.get('notes') || '',
+		}
+	}
+
+	return req.json()
+}
+
+async function getOrder(rawId) {
+	const id = Number(rawId)
+	if (!Number.isInteger(id)) return null
+	return db.workOrder.findUnique({
+		where: { id },
+		include: {
+			customer: {
+				include: {
+					_count: { select: { completions: true, workOrders: true } },
+				},
+			},
+			completions: { orderBy: { createdAt: 'desc' }, take: 1 },
+		},
+	})
+}
+
+export async function GET(_req, { params }) {
+	try {
+		const { id } = await params
+		const order = await getOrder(id)
+		if (!order) {
+			return NextResponse.json(
+				{ ok: false, error: 'Nie znaleziono zlecenia.' },
+				{ status: 404 }
+			)
+		}
+
+		return NextResponse.json({
+			ok: true,
+			order,
+			completion: order.completions?.[0] || null,
+		})
+	} catch (error) {
+		console.error('GET /api/work-orders/[id]/completion failed:', error)
+		return NextResponse.json(
+			{ ok: false, error: 'Blad ladowania formularza.' },
+			{ status: 500 }
+		)
+	}
+}
+
+export async function POST(req, { params }) {
+	try {
+		const { id } = await params
+		const order = await getOrder(id)
+		if (!order) {
+			return NextResponse.json(
+				{ ok: false, error: 'Nie znaleziono zlecenia.' },
+				{ status: 404 }
+			)
+		}
+
+		const body = await parseBody(req)
+		const normalizedPhone = normalizePhone(body.phone) || order.phone
+		const serviceUsed = boolOrNull(body.serviceUsed)
+		const completedAt = parseYmdToUtcDate(body.completedAt) || order.visitDate
+		const serviceNames = Array.isArray(body.serviceNames)
+			? body.serviceNames.map(String).filter(Boolean)
+			: String(body.serviceNames || order.service || '')
+					.split(',')
+					.map(item => item.trim())
+					.filter(Boolean)
+
+		if (!normalizedPhone) {
+			return NextResponse.json(
+				{ ok: false, error: 'Brak telefonu klienta.' },
+				{ status: 400 }
+			)
+		}
+
+		const customer = await upsertCustomerFromContact({
+			phone: normalizedPhone,
+			name: body.name || order.name,
+			gender: body.gender,
+			source: body.source,
+		})
+
+		const payload = {
+			customerId: customer?.id || order.customerId || null,
+			workOrderId: order.id,
+			formSubmittedAt: new Date(),
+			completedAt,
+			name: normalizeOptionalText(body.name) || order.name,
+			phone: normalizedPhone,
+			gender: normalizeOptionalText(body.gender),
+			source: normalizeOptionalText(body.source),
+			car:
+				normalizeOptionalText(body.car) ||
+				[order.carModel, order.regNumber].filter(Boolean).join(' / ') ||
+				null,
+			serviceUsed,
+			serviceNames,
+			amount: parseAmount(body.amount),
+			invoiceIssued: boolOrNull(body.invoiceIssued),
+			paymentMethod: normalizeOptionalText(body.paymentMethod),
+			notes: normalizeOptionalText(body.notes),
+			importSource: 'internal_form',
+			isTest: false,
+			rawData: body,
+		}
+
+		const existing = await db.workOrderCompletion.findFirst({
+			where: { workOrderId: order.id, importSource: 'internal_form' },
+			orderBy: { createdAt: 'desc' },
+		})
+
+		const completion = existing
+			? await db.workOrderCompletion.update({
+					where: { id: existing.id },
+					data: payload,
+			  })
+			: await db.workOrderCompletion.create({ data: payload })
+
+		const updatedOrder = await db.workOrder.update({
+			where: { id: order.id },
+			data: {
+				customerId: customer?.id || order.customerId,
+				status:
+					serviceUsed === false
+						? 'cancelled'
+						: serviceUsed === true
+						? 'completed'
+						: order.status,
+			},
+		})
+
+		await updateWorkOrderMessage(updatedOrder).catch(error =>
+			console.error('[completion telegram update]', error)
+		)
+		await updateScheduleMessage().catch(error =>
+			console.error('[completion schedule update]', error)
+		)
+		await updateIncompleteCompletionMessage().catch(error =>
+			console.error('[completion incomplete tracker update]', error)
+		)
+
+		const { searchParams } = new URL(req.url)
+		if (searchParams.get('redirect')) {
+			return NextResponse.redirect(
+				new URL(`/work-order-complete?id=${order.id}&saved=1`, req.url),
+				303
+			)
+		}
+
+		return NextResponse.json({ ok: true, completion })
+	} catch (error) {
+		console.error('POST /api/work-orders/[id]/completion failed:', error)
+		return NextResponse.json(
+			{ ok: false, error: error.message || 'Nie udalo sie zapisac.' },
+			{ status: 500 }
+		)
+	}
+}
