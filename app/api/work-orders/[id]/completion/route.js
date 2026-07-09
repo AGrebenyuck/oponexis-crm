@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { upsertCustomerFromContact } from '@/lib/customer'
 import { normalizeOptionalText, normalizePhone, parseYmdToUtcDate } from '@/lib/date'
 import { db } from '@/lib/prisma'
@@ -17,6 +17,32 @@ function boolOrNull(value) {
 	if (value === true || value === 'true') return true
 	if (value === false || value === 'false') return false
 	return null
+}
+
+function trimTrailingSlash(value) {
+	return String(value || '').replace(/\/+$/, '')
+}
+
+function getRedirectOrigin(req) {
+	const forwardedHost = req.headers.get('x-forwarded-host')
+	const forwardedProto = req.headers.get('x-forwarded-proto') || 'https'
+	const host = forwardedHost || req.headers.get('host') || ''
+	const publicUrl = trimTrailingSlash(process.env.CRM_PUBLIC_URL)
+
+	if (host && !host.includes('localhost') && !host.includes('127.0.0.1')) {
+		return `${forwardedProto}://${host}`
+	}
+
+	if (publicUrl) return publicUrl
+
+	return new URL(req.url).origin
+}
+
+function completionRedirectUrl(req, orderId) {
+	return new URL(
+		`/work-order-complete?id=${orderId}&saved=1`,
+		getRedirectOrigin(req)
+	)
 }
 
 async function parseBody(req) {
@@ -53,6 +79,7 @@ async function getOrder(rawId) {
 					_count: { select: { completions: true, workOrders: true } },
 				},
 			},
+			lead: true,
 			completions: { orderBy: { createdAt: 'desc' }, take: 1 },
 		},
 	})
@@ -98,6 +125,7 @@ export async function POST(req, { params }) {
 		const normalizedPhone = normalizePhone(body.phone) || order.phone
 		const serviceUsed = boolOrNull(body.serviceUsed)
 		const completedAt = parseYmdToUtcDate(body.completedAt) || order.visitDate
+		const source = normalizeOptionalText(body.source) || (order.leadId ? 'Site' : null)
 		const serviceNames = Array.isArray(body.serviceNames)
 			? body.serviceNames.map(String).filter(Boolean)
 			: String(body.serviceNames || order.service || '')
@@ -116,7 +144,7 @@ export async function POST(req, { params }) {
 			phone: normalizedPhone,
 			name: body.name || order.name,
 			gender: body.gender,
-			source: body.source,
+			source,
 		})
 
 		const payload = {
@@ -127,7 +155,7 @@ export async function POST(req, { params }) {
 			name: normalizeOptionalText(body.name) || order.name,
 			phone: normalizedPhone,
 			gender: normalizeOptionalText(body.gender),
-			source: normalizeOptionalText(body.source),
+			source,
 			car:
 				normalizeOptionalText(body.car) ||
 				[order.carModel, order.regNumber].filter(Boolean).join(' / ') ||
@@ -168,22 +196,21 @@ export async function POST(req, { params }) {
 			},
 		})
 
-		await updateWorkOrderMessage(updatedOrder).catch(error =>
-			console.error('[completion telegram update]', error)
-		)
-		await updateScheduleMessage().catch(error =>
-			console.error('[completion schedule update]', error)
-		)
-		await updateIncompleteCompletionMessage().catch(error =>
-			console.error('[completion incomplete tracker update]', error)
-		)
+		after(async () => {
+			await updateWorkOrderMessage(updatedOrder).catch(error =>
+				console.error('[completion telegram update]', error)
+			)
+			await updateScheduleMessage().catch(error =>
+				console.error('[completion schedule update]', error)
+			)
+			await updateIncompleteCompletionMessage().catch(error =>
+				console.error('[completion incomplete tracker update]', error)
+			)
+		})
 
 		const { searchParams } = new URL(req.url)
 		if (searchParams.get('redirect')) {
-			return NextResponse.redirect(
-				new URL(`/work-order-complete?id=${order.id}&saved=1`, req.url),
-				303
-			)
+			return NextResponse.redirect(completionRedirectUrl(req, order.id), 303)
 		}
 
 		return NextResponse.json({ ok: true, completion })

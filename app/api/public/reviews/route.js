@@ -11,14 +11,26 @@ function corsHeaders() {
 	}
 }
 
+function normalizeText(value) {
+	return String(value || '')
+		.trim()
+		.toLowerCase()
+		.replace(/\s+/g, ' ')
+}
+
+function getReviewKey(review) {
+	const authorUrl = String(review?.author_url || '').trim()
+	if (authorUrl) return `url:${authorUrl}`
+
+	const author = normalizeText(review?.author_name || 'google')
+	const text = normalizeText(review?.text)
+	if (text) return `text:${author}:${text}`
+
+	return `fallback:${author}:${review?.time || ''}:${review?.rating || ''}`
+}
+
 function getReviewId(review) {
-	return (
-		review.id ||
-		review.author_url ||
-		`${review.author_name || 'google'}-${review.time || ''}-${
-			review.rating || ''
-		}`
-	)
+	return review.id || getReviewKey(review)
 }
 
 function normalizeReview(review) {
@@ -40,21 +52,52 @@ function mergeReviews(oldReviews = [], freshReviews = []) {
 
 	for (const review of oldReviews) {
 		const normalized = normalizeReview(review)
-		map.set(normalized.id, normalized)
+		map.set(getReviewKey(normalized), normalized)
 	}
 
 	for (const review of freshReviews) {
 		const fresh = normalizeReview(review)
-		const old = map.get(fresh.id)
+		const key = getReviewKey(fresh)
+		const old = map.get(key)
 
-		map.set(fresh.id, {
+		map.set(key, {
 			...old,
 			...fresh,
 			text: fresh.text || old?.text || '',
+			id: old?.id || fresh.id,
 		})
 	}
 
 	return Array.from(map.values()).sort((a, b) => (b.time || 0) - (a.time || 0))
+}
+
+async function pruneCachedDuplicates(row) {
+	if (!row?.payload) return row
+
+	const reviews = Array.isArray(row.payload.reviews) ? row.payload.reviews : []
+	if (!reviews.length) return row
+
+	const dedupedReviews = mergeReviews([], reviews)
+	if (dedupedReviews.length === reviews.length) return row
+
+	const payload = {
+		...row.payload,
+		reviews: dedupedReviews,
+	}
+
+	console.info('[google-reviews-cache] duplicates pruned', {
+		before: reviews.length,
+		after: dedupedReviews.length,
+	})
+
+	return db.googleReviewsCache.update({
+		where: {
+			id: CACHE_ID,
+		},
+		data: {
+			payload,
+		},
+	})
 }
 
 async function fetchGoogleReviews() {
@@ -141,8 +184,9 @@ function formatResponse(row, { limit, minRating }) {
 
 	const payload = row.payload
 	const reviews = Array.isArray(payload.reviews) ? payload.reviews : []
+	const dedupedReviews = mergeReviews([], reviews)
 
-	const selected = reviews
+	const selected = dedupedReviews
 		.filter(
 			review =>
 				(review.text || '').trim().length > 0 &&
@@ -197,6 +241,8 @@ export async function GET(req) {
 				}
 			}
 		}
+
+		row = await pruneCachedDuplicates(row)
 
 		return NextResponse.json(
 			{

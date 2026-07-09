@@ -113,7 +113,7 @@ export async function POST(req) {
 		const customer = await upsertCustomerFromContact({
 			phone: normalizedPhone,
 			name,
-			source: leadId ? 'lead' : 'client_form',
+			source: leadId ? 'Site' : 'client_form',
 		})
 
 		const existingOrder = await findExistingWorkOrder({

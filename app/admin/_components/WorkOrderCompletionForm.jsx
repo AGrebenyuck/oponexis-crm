@@ -19,6 +19,24 @@ const serviceOptions = [
 
 const sources = ['Google maps', 'Site', 'Business card', 'Search system', 'Other']
 
+const serviceAliases = {
+	'Wymiana kół': ['wymiana kol', 'sezonowa wymiana kol', 'zmiana kol'],
+	'Wymiana opon': [
+		'wymiana opon',
+		'wymien opon',
+		'wymiana open',
+		'wimen open',
+		'przelozenie opon',
+		'opony bez felg',
+	],
+	'Remont opony': ['remont opony', 'naprawa opony', 'pomoc z opona'],
+	'Przechowania kół': ['przechowania kol', 'przechowywanie kol', 'magazynowanie kol'],
+	'Odpalenie auta': ['odpalenie auta', 'uruchomienie auta'],
+	'Sprzedaż używanych opon': ['sprzedaz uzywanych opon', 'uzywane opony'],
+	'Sprzedaż nowych opon': ['sprzedaz nowych opon', 'nowe opony'],
+	'Sprzedaż opony dojazdowej': ['opona dojazdowa', 'sprzedaz opony dojazdowej'],
+}
+
 const emptyForm = {
 	name: '',
 	gender: '',
@@ -37,6 +55,42 @@ const emptyForm = {
 function dateInput(value) {
 	if (!value) return ''
 	return new Date(value).toISOString().slice(0, 10)
+}
+
+function normalizeSearchText(value) {
+	return String(value || '')
+		.toLowerCase()
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '')
+		.replace(/ł/g, 'l')
+		.replace(/[^a-z0-9]+/g, ' ')
+		.replace(/\s+/g, ' ')
+		.trim()
+}
+
+function inferServiceNames(value) {
+	const text = normalizeSearchText(value)
+	if (!text) return []
+
+	return serviceOptions.filter(option => {
+		const optionText = normalizeSearchText(option)
+		const aliases = serviceAliases[option] || []
+		return (
+			text.includes(optionText) ||
+			aliases.some(alias => text.includes(normalizeSearchText(alias)))
+		)
+	})
+}
+
+function normalizeSource(value) {
+	const raw = String(value || '').trim()
+	const normalized = normalizeSearchText(raw)
+	if (!normalized) return ''
+	if (normalized.includes('google')) return 'Google maps'
+	if (normalized.includes('site') || normalized.includes('strona') || normalized === 'lead') return 'Site'
+	if (normalized.includes('business') || normalized.includes('wizytow')) return 'Business card'
+	if (normalized.includes('search') || normalized.includes('wyszukiw')) return 'Search system'
+	return sources.includes(raw) ? raw : 'Other'
 }
 
 export default function WorkOrderCompletionForm() {
@@ -76,9 +130,11 @@ export default function WorkOrderCompletionForm() {
 
 				const loadedOrder = json.order
 				const completion = json.completion
-				const baseServices = loadedOrder.service
-					? loadedOrder.service.split(',').map(item => item.trim()).filter(Boolean)
-					: []
+				const baseServices = inferServiceNames(loadedOrder.service)
+				const baseSource =
+					normalizeSource(completion?.source) ||
+					normalizeSource(loadedOrder.customer?.source) ||
+					(loadedOrder.leadId ? 'Site' : '')
 
 				setOrder(loadedOrder)
 				setCustomer(loadedOrder.customer || null)
@@ -86,7 +142,7 @@ export default function WorkOrderCompletionForm() {
 					name: completion?.name || loadedOrder.name || '',
 					gender: completion?.gender || '',
 					phone: completion?.phone || loadedOrder.phone || '',
-					source: completion?.source || '',
+					source: baseSource,
 					car:
 						completion?.car ||
 						[loadedOrder.carModel, loadedOrder.regNumber]
