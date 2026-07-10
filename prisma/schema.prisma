@@ -194,10 +194,55 @@ model WorkOrderCompletion {
   isTest        Boolean @default(false)
   rawData       Json?
 
+  customAnswers CompletionFormAnswer[]
+
   @@index([customerId])
   @@index([workOrderId])
   @@index([phone])
   @@index([completedAt])
+}
+
+model CompletionFormQuestion {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  key         String  @unique
+  label       String
+  type        String
+  required    Boolean @default(false)
+  options     Json?
+  position    Int     @default(0)
+  active      Boolean @default(true)
+  description String?
+
+  answers CompletionFormAnswer[]
+
+  @@index([active, position])
+}
+
+model CompletionFormAnswer {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  completionId String
+  questionId   String
+  value        Json?
+  valueText    String?
+
+  completion WorkOrderCompletion  @relation(fields: [completionId], references: [id], onDelete: Cascade)
+  question   CompletionFormQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([completionId, questionId])
+  @@index([questionId])
+}
+
+model CompletionFormOptionSet {
+  key       String   @id
+  options   Json
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
 }
 
 model SmsFormLog {

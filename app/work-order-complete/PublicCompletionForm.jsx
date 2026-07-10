@@ -5,6 +5,11 @@ export default function PublicCompletionForm({
 	defaults,
 	serviceOptions,
 	sources,
+	genderOptions = ['Mężczyzna', 'Kobieta'],
+	serviceUsedOptions = ['Tak', 'Nie'],
+	invoiceOptions = ['Tak', 'Nie'],
+	paymentOptions = ['Karta', 'Gotówka'],
+	customQuestions = [],
 }) {
 	const isEditing = Boolean(defaults.hasCompletion)
 	const saved = Boolean(defaults.saved)
@@ -70,8 +75,11 @@ export default function PublicCompletionForm({
 					<Field label='Płeć'>
 						<select name='gender' defaultValue={defaults.gender}>
 							<option value=''>Nie wybrano</option>
-							<option value='Mężczyzna'>Mężczyzna</option>
-							<option value='Kobieta'>Kobieta</option>
+							{genderOptions.map(option => (
+								<option key={option} value={option}>
+									{option}
+								</option>
+							))}
 						</select>
 					</Field>
 					<Field label='Źródło'>
@@ -93,8 +101,14 @@ export default function PublicCompletionForm({
 				<div className='opx-grid'>
 					<Field label='Skorzystał z usługi' required>
 						<select name='serviceUsed' required defaultValue={defaults.serviceUsed}>
-							<option value='true'>Tak</option>
-							<option value='false'>Nie</option>
+							{serviceUsedOptions.map(option => (
+								<option
+									key={option}
+									value={String(option).toLowerCase() === 'nie' ? 'false' : 'true'}
+								>
+									{option}
+								</option>
+							))}
 						</select>
 					</Field>
 					<Field label='Data'>
@@ -136,15 +150,24 @@ export default function PublicCompletionForm({
 					<Field label='Czek albo faktura'>
 						<select name='invoiceIssued' defaultValue={defaults.invoiceIssued}>
 							<option value=''>Nie wybrano</option>
-							<option value='true'>Tak</option>
-							<option value='false'>Nie</option>
+							{invoiceOptions.map(option => (
+								<option
+									key={option}
+									value={String(option).toLowerCase() === 'nie' ? 'false' : 'true'}
+								>
+									{option}
+								</option>
+							))}
 						</select>
 					</Field>
 					<Field label='Płatność'>
 						<select name='paymentMethod' defaultValue={defaults.paymentMethod}>
 							<option value=''>Nie wybrano</option>
-							<option value='Karta'>Karta</option>
-							<option value='Gotówka'>Gotówka</option>
+							{paymentOptions.map(option => (
+								<option key={option} value={option}>
+									{option}
+								</option>
+							))}
 						</select>
 					</Field>
 				</div>
@@ -152,6 +175,19 @@ export default function PublicCompletionForm({
 				<Field label='Notatka'>
 					<textarea name='notes' rows={3} defaultValue={defaults.notes} />
 				</Field>
+
+				{customQuestions.length ? (
+					<div className='opx-custom-fields'>
+						<h2>Dodatkowe pytania</h2>
+						{customQuestions.map(question => (
+							<CustomField
+								key={question.id}
+								question={question}
+								value={defaults.customAnswers?.[question.id]}
+							/>
+						))}
+					</div>
+				) : null}
 
 				<button
 					type='submit'
@@ -179,5 +215,65 @@ function Field({ label, required = false, children }) {
 			{label} {required ? <span style={{ color: '#dc2626' }}>*</span> : null}
 			{children}
 		</label>
+	)
+}
+
+function CustomField({ question, value }) {
+	const name = `custom_${question.id}`
+	const commonProps = {
+		name,
+		required: question.required,
+		defaultValue: Array.isArray(value) ? value.join(', ') : value || '',
+	}
+
+	if (question.type === 'long_text') {
+		return (
+			<Field label={question.label} required={question.required}>
+				<textarea {...commonProps} rows={3} />
+			</Field>
+		)
+	}
+
+	if (question.type === 'single_choice') {
+		return (
+			<Field label={question.label} required={question.required}>
+				<select name={name} required={question.required} defaultValue={value || ''}>
+					<option value=''>Nie wybrano</option>
+					{question.options.map(option => (
+						<option key={option} value={option}>
+							{option}
+						</option>
+					))}
+				</select>
+			</Field>
+		)
+	}
+
+	if (question.type === 'multiple_choice') {
+		const selected = Array.isArray(value) ? value : []
+		return (
+			<Field label={question.label} required={question.required}>
+				<div className='opx-checks'>
+					{question.options.map(option => (
+						<label key={option} className='opx-check'>
+							<input
+								type='checkbox'
+								name={name}
+								value={option}
+								defaultChecked={selected.includes(option)}
+							/>
+							<span>{option}</span>
+						</label>
+					))}
+				</div>
+			</Field>
+		)
+	}
+
+	const type = question.type === 'phone' ? 'tel' : question.type === 'number' ? 'number' : question.type === 'date' ? 'date' : 'text'
+	return (
+		<Field label={question.label} required={question.required}>
+			<input {...commonProps} type={type} step={question.type === 'number' ? '0.01' : undefined} />
+		</Field>
 	)
 }

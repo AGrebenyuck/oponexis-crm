@@ -1,4 +1,5 @@
 import { db } from '@/lib/prisma'
+import { getCompletionFormQuestionConfig } from '@/lib/completion-form-questions'
 import PublicCompletionForm from './PublicCompletionForm'
 
 export const dynamic = 'force-dynamic'
@@ -59,15 +60,36 @@ function inferServiceNames(value) {
 	})
 }
 
-function normalizeSource(value) {
+function uniqueOptions(...groups) {
+	const seen = new Set()
+	const result = []
+	groups.flat().forEach(value => {
+		const text = String(value || '').trim()
+		if (!text) return
+		const key = normalizeSearchText(text)
+		if (seen.has(key)) return
+		seen.add(key)
+		result.push(text)
+	})
+	return result
+}
+
+function questionOptions(questions, key, fallback = []) {
+	const question = questions.find(item => item.key === key)
+	return question?.options?.length ? question.options : fallback
+}
+
+function normalizeSource(value, availableSources = sources) {
 	const raw = String(value || '').trim()
 	const normalized = normalizeSearchText(raw)
 	if (!normalized) return ''
+	const exact = availableSources.find(source => normalizeSearchText(source) === normalized)
+	if (exact) return exact
 	if (normalized.includes('google')) return 'Google maps'
 	if (normalized.includes('site') || normalized.includes('strona') || normalized === 'lead') return 'Site'
 	if (normalized.includes('business') || normalized.includes('wizytow')) return 'Business card'
 	if (normalized.includes('search') || normalized.includes('wyszukiw')) return 'Search system'
-	return sources.includes(raw) ? raw : 'Other'
+	return 'Other'
 }
 
 function dateInput(value) {
@@ -79,6 +101,13 @@ export default async function PublicWorkOrderCompletionPage({ searchParams }) {
 	const params = await searchParams
 	const id = Number(params?.id)
 	const saved = params?.saved === '1'
+	const questionConfig = await getCompletionFormQuestionConfig({ activeOnly: true })
+	const configuredSourceOptions = questionOptions(questionConfig.questions, 'source', sources)
+	const configuredServiceOptions = questionOptions(questionConfig.questions, 'serviceNames', serviceOptions)
+	const genderOptions = questionOptions(questionConfig.questions, 'gender', ['Mężczyzna', 'Kobieta'])
+	const serviceUsedOptions = questionOptions(questionConfig.questions, 'serviceUsed', ['Tak', 'Nie'])
+	const invoiceOptions = questionOptions(questionConfig.questions, 'invoiceIssued', ['Tak', 'Nie'])
+	const paymentOptions = questionOptions(questionConfig.questions, 'paymentMethod', ['Karta', 'Gotówka'])
 	const order = id
 		? await db.workOrder.findUnique({
 				where: { id },
@@ -87,7 +116,11 @@ export default async function PublicWorkOrderCompletionPage({ searchParams }) {
 						include: { _count: { select: { completions: true, workOrders: true } } },
 					},
 					lead: true,
-					completions: { orderBy: { createdAt: 'desc' }, take: 1 },
+					completions: {
+						orderBy: { createdAt: 'desc' },
+						take: 1,
+						include: { customAnswers: true },
+					},
 				},
 		  })
 		: null
@@ -106,10 +139,12 @@ export default async function PublicWorkOrderCompletionPage({ searchParams }) {
 	const selectedServices = completion?.serviceNames?.length
 		? completion.serviceNames
 		: inferServiceNames(order.service)
+	const serviceNameOptions = uniqueOptions(configuredServiceOptions, selectedServices)
 	const selectedSource =
-		normalizeSource(completion?.source) ||
-		normalizeSource(order.customer?.source) ||
+		normalizeSource(completion?.source, configuredSourceOptions) ||
+		normalizeSource(order.customer?.source, configuredSourceOptions) ||
 		(order.leadId ? 'Site' : '')
+	const sourceOptions = uniqueOptions(configuredSourceOptions, selectedSource)
 	const car =
 		completion?.car ||
 		[order.carModel, order.regNumber].filter(Boolean).join(' / ')
@@ -138,6 +173,12 @@ export default async function PublicWorkOrderCompletionPage({ searchParams }) {
 		notes: completion?.notes || '',
 		hasCompletion: Boolean(completion),
 		saved,
+		customAnswers: Object.fromEntries(
+			(completion?.customAnswers || []).map(answer => [
+				answer.questionId,
+				answer.value ?? answer.valueText ?? '',
+			])
+		),
 	}
 
 	return (
@@ -152,8 +193,13 @@ export default async function PublicWorkOrderCompletionPage({ searchParams }) {
 			<PublicCompletionForm
 				orderId={order.id}
 				defaults={formDefaults}
-				serviceOptions={serviceOptions}
-				sources={sources}
+				serviceOptions={serviceNameOptions}
+				sources={sourceOptions}
+				genderOptions={genderOptions}
+				serviceUsedOptions={serviceUsedOptions}
+				invoiceOptions={invoiceOptions}
+				paymentOptions={paymentOptions}
+				customQuestions={questionConfig.customQuestions}
 			/>
 		</PublicShell>
 	)
@@ -182,6 +228,8 @@ function PublicShell({ title, subtitle, children }) {
 				.opx-checks { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; margin-top: 7px; }
 				.opx-check { display: flex; align-items: center; gap: 8px; margin: 0; border: 1px solid #d9e4ee; border-radius: 8px; padding: 10px; font-size: 13px; }
 				.opx-check input { width: auto; margin: 0; }
+				.opx-custom-fields { margin-top: 8px; border-top: 1px solid #e7eef5; padding-top: 14px; }
+				.opx-custom-fields h2 { margin: 0 0 12px; font-size: 18px; color: #132c43; }
 				.opx-submit { width: 100%; border: 0; border-radius: 8px; background: #fd6d02; color: white; padding: 13px 16px; font-weight: 900; font-size: 16px; transition: transform .15s ease, opacity .15s ease, background .15s ease; }
 				.opx-submit--loading { background: #d95b00; }
 				.opx-submit-content { display: inline-flex; align-items: center; justify-content: center; gap: 10px; }

@@ -6,6 +6,7 @@ const navItems = [
 	{ href: '/admin/promocodes', label: 'Promokody' },
 	{ href: '/admin/season', label: 'Sezon' },
 	{ href: '/admin/sms-campaigns', label: 'SMS kampanie' },
+	{ href: '/admin/forms', label: 'Formularz' },
 	{ href: '/admin/reservation', label: 'Nowa rezerwacja' },
 	{ href: '/admin/events', label: 'Zlecenia' },
 	{ href: '/admin/calendar', label: 'Kalendarz' },

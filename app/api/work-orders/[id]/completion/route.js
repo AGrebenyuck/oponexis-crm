@@ -3,6 +3,11 @@ import { upsertCustomerFromContact } from '@/lib/customer'
 import { normalizeOptionalText, normalizePhone, parseYmdToUtcDate } from '@/lib/date'
 import { db } from '@/lib/prisma'
 import {
+	getCustomCompletionQuestions,
+	normalizeCustomAnswerValue,
+	saveCustomCompletionAnswers,
+} from '@/lib/completion-form-questions'
+import {
 	updateIncompleteCompletionMessage,
 	updateScheduleMessage,
 	updateWorkOrderMessage,
@@ -49,6 +54,14 @@ async function parseBody(req) {
 	const contentType = req.headers.get('content-type') || ''
 	if (contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data')) {
 		const form = await req.formData()
+		const customQuestions = await getCustomCompletionQuestions({ activeOnly: true })
+		const customAnswers = Object.fromEntries(
+			customQuestions.map(question => [
+				question.id,
+				normalizeCustomAnswerValue(question, form),
+			])
+		)
+
 		return {
 			name: form.get('name') || '',
 			gender: form.get('gender') || '',
@@ -62,6 +75,8 @@ async function parseBody(req) {
 			invoiceIssued: form.get('invoiceIssued') || '',
 			paymentMethod: form.get('paymentMethod') || '',
 			notes: form.get('notes') || '',
+			customQuestions,
+			customAnswers,
 		}
 	}
 
@@ -80,7 +95,11 @@ async function getOrder(rawId) {
 				},
 			},
 			lead: true,
-			completions: { orderBy: { createdAt: 'desc' }, take: 1 },
+			completions: {
+				orderBy: { createdAt: 'desc' },
+				take: 1,
+				include: { customAnswers: true },
+			},
 		},
 	})
 }
@@ -122,6 +141,10 @@ export async function POST(req, { params }) {
 		}
 
 		const body = await parseBody(req)
+		if (!body.customQuestions) {
+			body.customQuestions = await getCustomCompletionQuestions({ activeOnly: true })
+			body.customAnswers = body.customAnswers || {}
+		}
 		const normalizedPhone = normalizePhone(body.phone) || order.phone
 		const serviceUsed = boolOrNull(body.serviceUsed)
 		const completedAt = parseYmdToUtcDate(body.completedAt) || order.visitDate
@@ -147,6 +170,7 @@ export async function POST(req, { params }) {
 			source,
 		})
 
+		const { customQuestions, ...rawBody } = body
 		const payload = {
 			customerId: customer?.id || order.customerId || null,
 			workOrderId: order.id,
@@ -168,7 +192,7 @@ export async function POST(req, { params }) {
 			notes: normalizeOptionalText(body.notes),
 			importSource: 'internal_form',
 			isTest: false,
-			rawData: body,
+			rawData: rawBody,
 		}
 
 		const existing = await db.workOrderCompletion.findFirst({
@@ -182,6 +206,12 @@ export async function POST(req, { params }) {
 					data: payload,
 			  })
 			: await db.workOrderCompletion.create({ data: payload })
+
+		await saveCustomCompletionAnswers(
+			completion.id,
+			customQuestions,
+			body.customAnswers || {}
+		)
 
 		const updatedOrder = await db.workOrder.update({
 			where: { id: order.id },
