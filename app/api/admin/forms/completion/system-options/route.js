@@ -26,6 +26,18 @@ export async function PATCH(req) {
 			)
 		}
 
+		if (!db.completionFormOptionSet) {
+			console.error('[completion form] completionFormOptionSet delegate is missing. Run prisma generate and redeploy.')
+			return NextResponse.json(
+				{
+					ok: false,
+					error:
+						'CRM działa na starej wersji Prisma Client. Zrób ponowny deploy po prisma generate.',
+				},
+				{ status: 500 }
+			)
+		}
+
 		const optionSet = await db.completionFormOptionSet.upsert({
 			where: { key },
 			update: { options },
